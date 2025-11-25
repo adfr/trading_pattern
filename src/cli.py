@@ -1,9 +1,7 @@
 """Command-line interface for the IBKR AI Trading System."""
 
-import json
 import sys
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Optional
 
 import click
@@ -29,11 +27,39 @@ def get_config(config_path: Optional[str] = None) -> Config:
         sys.exit(1)
 
 
+def connect_ibkr(config: Config):
+    """Connect to IBKR and return client."""
+    from .data.ibkr_client import IBKRClient
+
+    console.print("[yellow]Connecting to IBKR TWS/Gateway...[/yellow]")
+
+    try:
+        client = IBKRClient(config)
+        client.connect()
+        console.print("[green]Connected to IBKR[/green]")
+        return client
+    except Exception as e:
+        console.print(f"[red]Failed to connect to IBKR: {e}[/red]")
+        console.print()
+        console.print("[yellow]Make sure TWS or IB Gateway is running:[/yellow]")
+        console.print("  1. Open TWS or IB Gateway")
+        console.print("  2. Go to Configure → API → Settings")
+        console.print("  3. Enable 'Enable ActiveX and Socket Clients'")
+        console.print(f"  4. Set Socket port to {config.ibkr.port}")
+        console.print("  5. Add 127.0.0.1 to Trusted IPs")
+        console.print()
+        return None
+
+
 @click.group()
 @click.option("--config", "-c", type=click.Path(), help="Path to config file")
 @click.pass_context
 def cli(ctx: click.Context, config: Optional[str]) -> None:
-    """IBKR AI Trading System - AI-powered algorithmic trading."""
+    """IBKR AI Trading System - AI-powered algorithmic trading.
+
+    All data is sourced from IBKR to ensure consistency between
+    backtesting and live trading.
+    """
     ctx.ensure_object(dict)
     ctx.obj["config_path"] = config
 
@@ -51,25 +77,36 @@ def generate(
     conditions: str,
     count: int,
 ) -> None:
-    """Generate trading patterns using Claude AI."""
+    """Generate trading patterns using Claude AI.
+
+    Requires IBKR connection for market data.
+    """
     config = get_config(ctx.obj.get("config_path"))
     setup_logger("trading", config.logging.level, config.logging.file)
 
     console.print(Panel(f"Generating {count} pattern(s) for [bold]{symbol}[/bold]"))
+    console.print("[dim]Data source: IBKR (ensures backtest/live consistency)[/dim]")
+    console.print()
+
+    # Connect to IBKR
+    ibkr_client = connect_ibkr(config)
+    if not ibkr_client:
+        console.print("[red]Cannot generate patterns without IBKR connection.[/red]")
+        return
 
     try:
         from .ai.pattern_generator import PatternGenerator
         from .data.historical import HistoricalDataManager
 
-        # Get historical data
+        # Get historical data from IBKR
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console,
         ) as progress:
-            progress.add_task("Loading market data...", total=None)
+            progress.add_task("Loading market data from IBKR...", total=None)
 
-            data_manager = HistoricalDataManager(config)
+            data_manager = HistoricalDataManager(config, ibkr_client=ibkr_client)
             df = data_manager.get_data(
                 symbol=symbol,
                 timeframe=timeframe,
@@ -79,6 +116,8 @@ def generate(
             if df.empty:
                 console.print("[red]No data available for pattern generation[/red]")
                 return
+
+            console.print(f"[green]Loaded {len(df)} bars from IBKR[/green]")
 
         # Generate patterns
         database = Database(config.database_path)
@@ -123,6 +162,9 @@ def generate(
     except Exception as e:
         console.print(f"[red]Error generating patterns: {e}[/red]")
         raise
+    finally:
+        if ibkr_client:
+            ibkr_client.disconnect()
 
 
 @cli.command()
@@ -140,7 +182,10 @@ def backtest(
     end: Optional[datetime],
     walk_forward: bool,
 ) -> None:
-    """Backtest trading patterns."""
+    """Backtest trading patterns using IBKR data.
+
+    Uses same data source as live trading to ensure consistency.
+    """
     config = get_config(ctx.obj.get("config_path"))
     setup_logger("trading", config.logging.level, config.logging.file)
 
@@ -163,84 +208,97 @@ def backtest(
         return
 
     console.print(Panel(f"Backtesting {len(patterns)} pattern(s)"))
+    console.print("[dim]Data source: IBKR (ensures backtest/live consistency)[/dim]")
+    console.print()
 
-    from .backtest.engine import BacktestEngine
-    from .backtest.optimizer import WalkForwardOptimizer
-    from .data.historical import HistoricalDataManager
+    # Connect to IBKR
+    ibkr_client = connect_ibkr(config)
+    if not ibkr_client:
+        console.print("[red]Cannot backtest without IBKR connection.[/red]")
+        return
 
-    backtest_engine = BacktestEngine(config, database)
-    data_manager = HistoricalDataManager(config)
+    try:
+        from .backtest.engine import BacktestEngine
+        from .backtest.optimizer import WalkForwardOptimizer
+        from .data.historical import HistoricalDataManager
 
-    results_table = Table(title="Backtest Results")
-    results_table.add_column("Pattern", style="cyan")
-    results_table.add_column("Trades", justify="right")
-    results_table.add_column("Win Rate", justify="right")
-    results_table.add_column("Profit Factor", justify="right")
-    results_table.add_column("Sharpe", justify="right")
-    results_table.add_column("Max DD", justify="right")
-    results_table.add_column("Result", justify="center")
+        backtest_engine = BacktestEngine(config, database)
+        data_manager = HistoricalDataManager(config, ibkr_client=ibkr_client)
 
-    for pattern in patterns:
-        symbol = pattern.get("symbol", "QQQ")
+        results_table = Table(title="Backtest Results")
+        results_table.add_column("Pattern", style="cyan")
+        results_table.add_column("Trades", justify="right")
+        results_table.add_column("Win Rate", justify="right")
+        results_table.add_column("Profit Factor", justify="right")
+        results_table.add_column("Sharpe", justify="right")
+        results_table.add_column("Max DD", justify="right")
+        results_table.add_column("Result", justify="center")
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            progress.add_task(f"Backtesting {pattern['name']}...", total=None)
+        for pattern in patterns:
+            symbol = pattern.get("symbol", "QQQ")
 
-            # Get data
-            df = data_manager.get_data(
-                symbol=symbol,
-                start_date=start,
-                end_date=end,
-                timeframe=pattern.get("timeframe", "1min"),
-            )
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                progress.add_task(f"Backtesting {pattern['name']}...", total=None)
 
-            if df.empty:
-                console.print(f"[yellow]No data for {pattern['name']}[/yellow]")
-                continue
+                # Get data from IBKR
+                df = data_manager.get_data(
+                    symbol=symbol,
+                    start_date=start,
+                    end_date=end,
+                    timeframe=pattern.get("timeframe", "1min"),
+                )
 
-            # Run backtest
-            if walk_forward:
-                optimizer = WalkForwardOptimizer(config, backtest_engine)
-                wf_result = optimizer.run(pattern, df)
-                result = wf_result
-                metrics = wf_result.out_of_sample_metrics
-                passed = wf_result.passed
+                if df.empty:
+                    console.print(f"[yellow]No IBKR data for {pattern['name']}[/yellow]")
+                    continue
+
+                # Run backtest
+                if walk_forward:
+                    optimizer = WalkForwardOptimizer(config, backtest_engine)
+                    wf_result = optimizer.run(pattern, df)
+                    result = wf_result
+                    metrics = wf_result.out_of_sample_metrics
+                    passed = wf_result.passed
+                else:
+                    result = backtest_engine.run(pattern, df, start, end)
+                    metrics = result.metrics
+                    passed = result.passed
+
+                # Update pattern status
+                new_status = "backtested" if passed else "failed"
+                database.update_pattern_status(
+                    pattern["id"],
+                    new_status,
+                    result.to_dict() if hasattr(result, "to_dict") else {},
+                )
+
+            # Add to results table
+            if metrics:
+                results_table.add_row(
+                    pattern["name"][:30],
+                    str(metrics.total_trades),
+                    f"{metrics.win_rate:.1%}",
+                    f"{metrics.profit_factor:.2f}",
+                    f"{metrics.sharpe_ratio:.2f}",
+                    f"{metrics.max_drawdown:.1%}",
+                    "[green]PASS[/green]" if passed else "[red]FAIL[/red]",
+                )
             else:
-                result = backtest_engine.run(pattern, df, start, end)
-                metrics = result.metrics
-                passed = result.passed
+                results_table.add_row(
+                    pattern["name"][:30],
+                    "0", "N/A", "N/A", "N/A", "N/A",
+                    "[red]FAIL[/red]",
+                )
 
-            # Update pattern status
-            new_status = "backtested" if passed else "failed"
-            database.update_pattern_status(
-                pattern["id"],
-                new_status,
-                result.to_dict() if hasattr(result, "to_dict") else {},
-            )
+        console.print(results_table)
 
-        # Add to results table
-        if metrics:
-            results_table.add_row(
-                pattern["name"][:30],
-                str(metrics.total_trades),
-                f"{metrics.win_rate:.1%}",
-                f"{metrics.profit_factor:.2f}",
-                f"{metrics.sharpe_ratio:.2f}",
-                f"{metrics.max_drawdown:.1%}",
-                "[green]PASS[/green]" if passed else "[red]FAIL[/red]",
-            )
-        else:
-            results_table.add_row(
-                pattern["name"][:30],
-                "0", "N/A", "N/A", "N/A", "N/A",
-                "[red]FAIL[/red]",
-            )
-
-    console.print(results_table)
+    finally:
+        if ibkr_client:
+            ibkr_client.disconnect()
 
 
 @cli.command()
@@ -269,7 +327,10 @@ def deploy(ctx: click.Context, pattern_id: str) -> None:
 @click.option("--mode", "-m", type=click.Choice(["paper", "live"]), default="paper")
 @click.pass_context
 def trade(ctx: click.Context, mode: str) -> None:
-    """Start live trading."""
+    """Start live trading.
+
+    Connects to IBKR for real-time data and order execution.
+    """
     config = get_config(ctx.obj.get("config_path"))
     setup_logger("trading", config.logging.level, config.logging.file)
 
@@ -284,8 +345,15 @@ def trade(ctx: click.Context, mode: str) -> None:
 
     try:
         from .execution.live_trader import LiveTrader
+        from .data.ibkr_client import IBKRClient
 
-        trader = LiveTrader(config)
+        # Connect to IBKR
+        ibkr_client = connect_ibkr(config)
+        if not ibkr_client:
+            console.print("[red]Cannot trade without IBKR connection.[/red]")
+            return
+
+        trader = LiveTrader(config, ibkr_client=ibkr_client)
 
         console.print("[yellow]Press Ctrl+C to stop trading[/yellow]")
         console.print()
@@ -317,6 +385,37 @@ def trade(ctx: click.Context, mode: str) -> None:
 
 @cli.command()
 @click.pass_context
+def connect(ctx: click.Context) -> None:
+    """Test connection to IBKR."""
+    config = get_config(ctx.obj.get("config_path"))
+
+    ibkr_client = connect_ibkr(config)
+    if ibkr_client:
+        try:
+            # Get account info
+            summary = ibkr_client.get_account_summary()
+            positions = ibkr_client.get_positions()
+
+            table = Table(title="IBKR Connection Status")
+            table.add_column("Property", style="cyan")
+            table.add_column("Value", style="green")
+
+            table.add_row("Connected", "Yes")
+            table.add_row("Host", config.ibkr.host)
+            table.add_row("Port", str(config.ibkr.port))
+            table.add_row("Net Liquidation", f"${summary.get('NetLiquidation', 0):,.2f}")
+            table.add_row("Available Funds", f"${summary.get('AvailableFunds', 0):,.2f}")
+            table.add_row("Open Positions", str(len(positions)))
+
+            console.print(table)
+
+        finally:
+            ibkr_client.disconnect()
+            console.print("[dim]Disconnected from IBKR[/dim]")
+
+
+@cli.command()
+@click.pass_context
 def status(ctx: click.Context) -> None:
     """View system status."""
     config = get_config(ctx.obj.get("config_path"))
@@ -340,6 +439,8 @@ def status(ctx: click.Context) -> None:
     table.add_row("Failed", str(failed))
     table.add_row("Trading Mode", config.trading.mode)
     table.add_row("Symbols", ", ".join(config.trading.symbols))
+    table.add_row("IBKR Host", f"{config.ibkr.host}:{config.ibkr.port}")
+    table.add_row("Data Source", "IBKR (consistent)")
 
     console.print(table)
 

@@ -1,4 +1,4 @@
-"""Historical data management."""
+"""Historical data management - IBKR as primary source."""
 
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -6,35 +6,40 @@ from typing import Optional
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
 
 from ..core.config import Config
 from ..core.database import Database
 from ..core.logger import get_logger
-from ..core.exceptions import InsufficientDataError
+from ..core.exceptions import InsufficientDataError, IBKRConnectionError
 
 logger = get_logger(__name__)
 
 
 class HistoricalDataManager:
     """
-    Manages historical market data from multiple sources.
+    Manages historical market data with IBKR as the primary source.
 
-    Supports:
-    - Yahoo Finance for free historical data
-    - IBKR for more granular intraday data
-    - Local caching with SQLite/CSV
+    IMPORTANT: Uses IBKR for all data to ensure consistency between
+    backtesting and live trading. This prevents discrepancies that
+    can cause strategies to fail in production.
     """
 
-    def __init__(self, config: Config, database: Optional[Database] = None):
+    def __init__(
+        self,
+        config: Config,
+        ibkr_client=None,
+        database: Optional[Database] = None,
+    ):
         """
         Initialize historical data manager.
 
         Args:
             config: Configuration object
+            ibkr_client: IBKR client instance (required for data)
             database: Database instance (optional)
         """
         self.config = config
+        self.ibkr_client = ibkr_client
         self.database = database
 
         # Cache settings
@@ -42,26 +47,38 @@ class HistoricalDataManager:
         self._cache_dir = Path("data/cache")
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Track data source for transparency
+        self._data_sources: dict[str, str] = {}
+
+    def set_ibkr_client(self, ibkr_client) -> None:
+        """Set or update the IBKR client."""
+        self.ibkr_client = ibkr_client
+        logger.info("IBKR client set for historical data")
+
     def get_data(
         self,
         symbol: str,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         timeframe: str = "1min",
-        source: str = "auto",
+        use_cache: bool = True,
     ) -> pd.DataFrame:
         """
-        Get historical data for a symbol.
+        Get historical data for a symbol from IBKR.
 
         Args:
             symbol: Ticker symbol
             start_date: Start date
             end_date: End date
             timeframe: Data timeframe (1min, 5min, 15min, 1hour, 1day)
-            source: Data source (auto, yahoo, ibkr, cache)
+            use_cache: Whether to use cached data
 
         Returns:
             DataFrame with OHLCV data
+
+        Raises:
+            IBKRConnectionError: If IBKR is not connected
+            InsufficientDataError: If no data available
         """
         # Default date range
         if end_date is None:
@@ -72,132 +89,155 @@ class HistoricalDataManager:
         cache_key = f"{symbol}_{timeframe}_{start_date.date()}_{end_date.date()}"
 
         # Check memory cache
-        if cache_key in self._cache:
+        if use_cache and cache_key in self._cache:
+            logger.debug(f"Using cached data for {symbol}")
             return self._cache[cache_key]
 
         # Check file cache
         cache_file = self._cache_dir / f"{cache_key}.parquet"
-        if cache_file.exists() and source != "fresh":
+        if use_cache and cache_file.exists():
             try:
                 df = pd.read_parquet(cache_file)
-                self._cache[cache_key] = df
-                logger.info(f"Loaded {len(df)} bars from cache for {symbol}")
-                return df
+                # Verify cache was from IBKR
+                meta_file = self._cache_dir / f"{cache_key}.meta"
+                if meta_file.exists():
+                    with open(meta_file) as f:
+                        source = f.read().strip()
+                    if source == "ibkr":
+                        self._cache[cache_key] = df
+                        self._data_sources[cache_key] = "ibkr_cache"
+                        logger.info(f"Loaded {len(df)} bars from IBKR cache for {symbol}")
+                        return df
+                    else:
+                        logger.warning(f"Cache for {symbol} is from {source}, fetching fresh from IBKR")
             except Exception as e:
                 logger.warning(f"Failed to load cache: {e}")
 
-        # Fetch from source
-        if source == "auto":
-            # Use Yahoo for daily data, IBKR for intraday
-            if timeframe in ("1day", "1d"):
-                df = self._fetch_from_yahoo(symbol, start_date, end_date, timeframe)
-            else:
-                # Try Yahoo first for minute data (limited history)
-                df = self._fetch_from_yahoo(symbol, start_date, end_date, timeframe)
-        elif source == "yahoo":
-            df = self._fetch_from_yahoo(symbol, start_date, end_date, timeframe)
-        else:
-            df = self._fetch_from_yahoo(symbol, start_date, end_date, timeframe)
+        # Fetch from IBKR
+        df = self._fetch_from_ibkr(symbol, start_date, end_date, timeframe)
 
         if df.empty:
-            raise InsufficientDataError(f"No data available for {symbol}")
+            raise InsufficientDataError(
+                f"No data available for {symbol}. "
+                "Ensure IBKR is connected and symbol is valid."
+            )
 
         # Cache the data
         self._cache[cache_key] = df
+        self._data_sources[cache_key] = "ibkr"
+
         try:
             df.to_parquet(cache_file)
+            # Write metadata
+            meta_file = self._cache_dir / f"{cache_key}.meta"
+            with open(meta_file, "w") as f:
+                f.write("ibkr")
         except Exception as e:
             logger.warning(f"Failed to cache data: {e}")
 
         return df
 
-    def _fetch_from_yahoo(
+    def _fetch_from_ibkr(
         self,
         symbol: str,
         start_date: datetime,
         end_date: datetime,
         timeframe: str,
     ) -> pd.DataFrame:
-        """Fetch data from Yahoo Finance."""
-        # Map timeframe to yfinance interval
-        interval_map = {
-            "1min": "1m",
-            "2min": "2m",
-            "5min": "5m",
-            "15min": "15m",
-            "30min": "30m",
-            "1hour": "1h",
-            "1day": "1d",
-            "1d": "1d",
+        """Fetch data from IBKR."""
+        if not self.ibkr_client:
+            raise IBKRConnectionError(
+                "IBKR client not configured. "
+                "The system requires IBKR for data to ensure consistency "
+                "between backtesting and live trading."
+            )
+
+        if not self.ibkr_client.connected:
+            raise IBKRConnectionError(
+                "IBKR not connected. Please connect to TWS/Gateway first. "
+                "Run: ibkr_client.connect()"
+            )
+
+        # Map timeframe to IBKR bar size
+        bar_size_map = {
+            "1min": "1 min",
+            "2min": "2 mins",
+            "5min": "5 mins",
+            "15min": "15 mins",
+            "30min": "30 mins",
+            "1hour": "1 hour",
+            "1day": "1 day",
         }
 
-        interval = interval_map.get(timeframe, "1d")
+        bar_size = bar_size_map.get(timeframe, "1 min")
 
-        # Yahoo Finance limitations
-        # - 1m data: max 7 days
-        # - 2m, 5m, 15m, 30m: max 60 days
-        # - 1h: max 730 days
-        # - 1d: unlimited
+        # Calculate duration
+        days = (end_date - start_date).days
+        if days <= 1:
+            duration = "1 D"
+        elif days <= 7:
+            duration = f"{days} D"
+        elif days <= 30:
+            duration = f"{days} D"
+        elif days <= 365:
+            months = days // 30
+            duration = f"{months} M"
+        else:
+            years = days // 365
+            duration = f"{years} Y"
 
         try:
-            ticker = yf.Ticker(symbol)
+            logger.info(f"Fetching {symbol} from IBKR: {duration} of {bar_size} bars")
 
-            # Adjust for Yahoo limitations
-            if interval == "1m":
-                max_days = 7
-                if (end_date - start_date).days > max_days:
-                    start_date = end_date - timedelta(days=max_days)
-            elif interval in ("2m", "5m", "15m", "30m"):
-                max_days = 60
-                if (end_date - start_date).days > max_days:
-                    start_date = end_date - timedelta(days=max_days)
-
-            df = ticker.history(
-                start=start_date,
-                end=end_date,
-                interval=interval,
+            df = self.ibkr_client.get_historical_data(
+                symbol=symbol,
+                duration=duration,
+                bar_size=bar_size,
+                what_to_show="TRADES",
+                use_rth=True,
             )
 
             if df.empty:
+                logger.warning(f"IBKR returned no data for {symbol}")
                 return df
 
-            # Standardize column names
+            # Filter to requested date range
+            if start_date:
+                df = df[df.index >= start_date]
+            if end_date:
+                df = df[df.index <= end_date]
+
+            # Ensure standard column names
             df.columns = [c.lower() for c in df.columns]
-            df = df[["open", "high", "low", "close", "volume"]]
 
-            # Filter to market hours for intraday data
-            if interval in ("1m", "2m", "5m", "15m", "30m", "1h"):
-                df = self._filter_market_hours(df)
-
-            logger.info(f"Fetched {len(df)} bars from Yahoo for {symbol}")
+            logger.info(f"Fetched {len(df)} bars from IBKR for {symbol}")
             return df
 
         except Exception as e:
-            logger.error(f"Failed to fetch from Yahoo: {e}")
-            return pd.DataFrame()
+            logger.error(f"Failed to fetch from IBKR: {e}")
+            raise IBKRConnectionError(f"IBKR data fetch failed: {e}")
 
-    def _filter_market_hours(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Filter DataFrame to regular market hours."""
-        if df.empty:
-            return df
+    def get_realtime_snapshot(self, symbol: str) -> dict:
+        """
+        Get real-time price snapshot from IBKR.
 
-        # Convert to Eastern time if not already
-        if df.index.tz is None:
-            df.index = df.index.tz_localize("UTC")
+        Args:
+            symbol: Ticker symbol
 
-        df.index = df.index.tz_convert("America/New_York")
+        Returns:
+            Dictionary with current price data
+        """
+        if not self.ibkr_client or not self.ibkr_client.connected:
+            raise IBKRConnectionError("IBKR not connected")
 
-        # Filter to market hours (9:30 AM - 4:00 PM ET)
-        market_open = pd.Timestamp("09:30").time()
-        market_close = pd.Timestamp("16:00").time()
+        price = self.ibkr_client.get_current_price(symbol)
 
-        mask = (df.index.time >= market_open) & (df.index.time <= market_close)
-        df = df[mask]
-
-        # Filter to weekdays
-        df = df[df.index.dayofweek < 5]
-
-        return df
+        return {
+            "symbol": symbol,
+            "price": price,
+            "timestamp": datetime.now(),
+            "source": "ibkr",
+        }
 
     def get_multiple_symbols(
         self,
@@ -207,7 +247,7 @@ class HistoricalDataManager:
         timeframe: str = "1day",
     ) -> dict[str, pd.DataFrame]:
         """
-        Get historical data for multiple symbols.
+        Get historical data for multiple symbols from IBKR.
 
         Args:
             symbols: List of ticker symbols
@@ -308,7 +348,6 @@ class HistoricalDataManager:
         returns = self.calculate_returns(recent, "simple")
 
         # Calculate metrics
-        mean_return = returns.mean()
         std_return = returns.std()
         total_return = (recent["close"].iloc[-1] / recent["close"].iloc[0]) - 1
 
@@ -331,7 +370,7 @@ class HistoricalDataManager:
         timeframe: str = "1min",
     ) -> pd.DataFrame:
         """
-        Prepare data for backtesting.
+        Prepare data for backtesting using IBKR data.
 
         Ensures data quality and adds useful columns.
 
@@ -351,7 +390,10 @@ class HistoricalDataManager:
         df = self.get_data(symbol, data_start, end_date, timeframe)
 
         if df.empty:
-            raise InsufficientDataError(f"No data for {symbol} backtest")
+            raise InsufficientDataError(f"No IBKR data for {symbol} backtest")
+
+        # Verify data source
+        logger.info(f"Backtest data source: IBKR (ensuring consistency with live trading)")
 
         # Add useful columns
         df["returns"] = self.calculate_returns(df, "log")
@@ -367,8 +409,58 @@ class HistoricalDataManager:
         # Filter to actual backtest period
         df = df[df.index >= start_date]
 
-        logger.info(f"Prepared {len(df)} bars for {symbol} backtest")
+        logger.info(f"Prepared {len(df)} IBKR bars for {symbol} backtest")
         return df
+
+    def verify_data_consistency(self, symbol: str) -> dict:
+        """
+        Verify that cached data matches current IBKR data.
+
+        Useful for ensuring no stale cache issues.
+
+        Args:
+            symbol: Ticker symbol
+
+        Returns:
+            Verification results
+        """
+        results = {
+            "symbol": symbol,
+            "verified": False,
+            "issues": [],
+        }
+
+        try:
+            # Get fresh data
+            fresh_df = self.get_data(symbol, use_cache=False)
+
+            # Get cached data
+            cache_keys = [k for k in self._cache if k.startswith(symbol)]
+
+            for key in cache_keys:
+                cached_df = self._cache[key]
+
+                # Compare overlapping period
+                overlap_start = max(cached_df.index[0], fresh_df.index[0])
+                overlap_end = min(cached_df.index[-1], fresh_df.index[-1])
+
+                cached_overlap = cached_df[overlap_start:overlap_end]
+                fresh_overlap = fresh_df[overlap_start:overlap_end]
+
+                if len(cached_overlap) != len(fresh_overlap):
+                    results["issues"].append(f"Row count mismatch in {key}")
+                else:
+                    # Check prices match
+                    price_diff = abs(cached_overlap["close"] - fresh_overlap["close"]).max()
+                    if price_diff > 0.01:
+                        results["issues"].append(f"Price discrepancy in {key}: {price_diff}")
+
+            results["verified"] = len(results["issues"]) == 0
+
+        except Exception as e:
+            results["issues"].append(f"Verification failed: {e}")
+
+        return results
 
     def clear_cache(self, symbol: Optional[str] = None) -> None:
         """Clear cached data."""
@@ -379,12 +471,19 @@ class HistoricalDataManager:
                 del self._cache[key]
 
             # Remove cache files
-            for cache_file in self._cache_dir.glob(f"{symbol}_*.parquet"):
+            for cache_file in self._cache_dir.glob(f"{symbol}_*"):
                 cache_file.unlink()
         else:
             # Clear all
             self._cache.clear()
-            for cache_file in self._cache_dir.glob("*.parquet"):
+            for cache_file in self._cache_dir.glob("*"):
                 cache_file.unlink()
 
         logger.info(f"Cache cleared for {symbol or 'all symbols'}")
+
+    def get_data_source(self, symbol: str) -> str:
+        """Get the data source used for a symbol."""
+        for key, source in self._data_sources.items():
+            if key.startswith(symbol):
+                return source
+        return "unknown"
