@@ -1,174 +1,203 @@
-# TimeRAG for Financial Pattern Recognition
+# IBKR AI Trading System
 
-## Overview
+A rigorous, AI-powered algorithmic trading system for Interactive Brokers that uses Claude to generate, backtest, and deploy trading patterns.
 
-TimeRAG (Time Series Retrieval Augmented Generation) is a framework for detecting patterns in financial time series data. This implementation focuses on minute-level data analysis for stock market patterns, specifically configured for QQQ ETF.
+## Architecture
 
-## Key Components
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           IBKR AI Trading System                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │   Claude    │───▶│  Strategy   │───▶│  Backtest   │───▶│ Production  │  │
+│  │  AI Engine  │    │  Generator  │    │   Engine    │    │   Deploy    │  │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+│         │                  │                  │                  │          │
+│         ▼                  ▼                  ▼                  ▼          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐│
+│  │                        Core Infrastructure                              ││
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐     ││
+│  │  │  Config  │ │  Events  │ │ Database │ │  Logger  │ │   Risk   │     ││
+│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘     ││
+│  └─────────────────────────────────────────────────────────────────────────┘│
+│         │                                                     │             │
+│         ▼                                                     ▼             │
+│  ┌─────────────┐                                      ┌─────────────┐      │
+│  │  IBKR API   │◀────────────────────────────────────▶│  Execution  │      │
+│  │   Client    │                                      │   Engine    │      │
+│  └─────────────┘                                      └─────────────┘      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
-The implementation consists of four main parts:
+## Features
 
-### 1. Core TimeRAG Implementation (`timerag_minute_implementation.py`)
-
-- Adapts the TimeRAG framework for intraday pattern recognition
-- Uses pattern matching techniques including Dynamic Time Warping (DTW) and Euclidean distance
-- Includes pre-defined intraday patterns (ascending triangles, bull flags, etc.)
-- Handles minute-level data specific challenges (filtering for market hours, etc.)
-
-### 2. Test Script for QQQ Data (`test_minute_timerag_qqq.py`)
-
-- Simplified implementation focused on pattern detection in QQQ minute data
-- Uses Euclidean distance for pattern comparison
-- Includes visualization tools for detected patterns
-- Implements CSV export for further analysis
-- Supports custom pattern templates
-
-### 3. Demonstration Script (`timerag_minute_demo.py`)
-
-- Provides comprehensive analysis of detected patterns
-- Includes simulation of live trading based on patterns
-- Visualizes pattern distribution and trading results
-- Compares pattern detection across multiple symbols
-
-### 4. Live Trading System (`timerag_live_trading.py`)
-
-- Implements a real-time trading framework
-- Handles continuous data updates
-- Executes trades based on pattern detection
-- Includes position management and performance tracking
-
-## Key Features for Financial Traders
-
-### Intraday Pattern Recognition
-
-- Detects common intraday patterns:
-  - Ascending triangles
-  - Bull flags
-  - Double bottoms
-  - Head and shoulders
-  - Cup and handle
-  - Custom patterns (ascending/descending wedges, consolidations)
-- Calculates confidence scores for each match
-- Works with various timeframes (1-minute, 5-minute, etc.)
-
-### Trading Strategy Integration
-
-- Automatically generates buy/sell signals based on pattern types
-- Includes configurable confidence thresholds for trade entry
-- Implements time-based exits for risk management
-
-### Performance Analysis
-
-- Tracks pattern detection with detailed statistics
-- Visualizes pattern distribution and confidence levels
-- Exports detection results to CSV for further analysis
+- **AI-Powered Pattern Generation**: Claude generates trading patterns based on market analysis
+- **Rigorous Backtesting**: Statistical validation with walk-forward optimization
+- **IBKR Integration**: Native TWS/Gateway API integration for live trading
+- **Risk Management**: Position sizing, stop losses, exposure limits
+- **Event-Driven Architecture**: Scalable, real-time processing
+- **Production-Ready**: Comprehensive logging, monitoring, and alerting
 
 ## Installation
 
-1. Clone this repository:
 ```bash
-git clone <repository-url>
-cd trading_pattern
-```
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or: venv\Scripts\activate  # Windows
 
-2. Create a virtual environment and activate it:
-```bash
-python -m venv timerag_env
-source timerag_env/bin/activate  # On Windows: timerag_env\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+# Install dependencies
 pip install -r requirements.txt
+
+# Copy and configure settings
+cp config/config.example.yaml config/config.yaml
+# Edit config/config.yaml with your settings
 ```
 
-## Data Preparation
+## Configuration
 
-The system can work with data from Yahoo Finance or pre-downloaded CSV files:
+1. **IBKR Setup**: Configure TWS or IB Gateway
+   - Enable API connections in TWS: Configure → API → Settings
+   - Set port (default: 7497 for paper, 7496 for live)
 
-### Using Yahoo Finance Data
-```bash
-python test_minute_timerag_qqq.py --symbol QQQ --period 5d --interval 1m
-```
+2. **Claude API**: Set your Anthropic API key
+   ```bash
+   export ANTHROPIC_API_KEY=your_key_here
+   ```
 
-### Using CSV Data
-```bash
-python test_minute_timerag_qqq.py --csv QQQ_minute_data.csv
-```
+3. **Configuration File**: Edit `config/config.yaml`
 
-## Usage Examples
+## Usage
 
-### Basic Pattern Detection
-
-```bash
-python test_minute_timerag_qqq.py
-```
-
-### Customized Pattern Detection
+### 1. Generate Trading Patterns with AI
 
 ```bash
-python test_minute_timerag_qqq.py --threshold 3.0 --window 60 --step 5 --max-patterns 5
+# Generate new patterns using Claude
+python -m src.cli generate --symbol QQQ --timeframe 1min
+
+# Generate with specific market conditions
+python -m src.cli generate --symbol SPY --conditions "high volatility"
 ```
 
-### Adding Custom Patterns
+### 2. Backtest Patterns
 
 ```bash
-python test_minute_timerag_qqq.py --custom-pattern ascending_wedge
+# Backtest all pending patterns
+python -m src.cli backtest --all
+
+# Backtest specific pattern
+python -m src.cli backtest --pattern-id abc123
+
+# Backtest with custom date range
+python -m src.cli backtest --pattern-id abc123 --start 2024-01-01 --end 2024-06-01
 ```
 
-### Saving Results
+### 3. Deploy to Production
 
 ```bash
-python test_minute_timerag_qqq.py --save-csv --save-fig
+# Deploy patterns that passed backtesting
+python -m src.cli deploy --pattern-id abc123
+
+# Start live trading
+python -m src.cli trade --mode live
+
+# Paper trading mode
+python -m src.cli trade --mode paper
 ```
 
-## Command Line Options
+### 4. Monitor System
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--csv` | CSV file with minute data | `QQQ_minute_data.csv` |
-| `--symbol` | Ticker symbol to analyze | `QQQ` |
-| `--period` | Period to download from Yahoo Finance | `5d` |
-| `--interval` | Data interval | `1m` |
-| `--window` | Pattern window size in minutes | `60` |
-| `--step` | Step size for sliding window | `5` |
-| `--threshold` | Pattern detection threshold (lower is stricter) | `5.0` |
-| `--max-patterns` | Maximum patterns to visualize | `3` |
-| `--save-csv` | Save detected patterns to CSV file | `False` |
-| `--save-fig` | Save visualization to PNG file | `False` |
-| `--custom-pattern` | Add a custom pattern type | `None` |
+```bash
+# View system status
+python -m src.cli status
 
-## For Developers
+# View active positions
+python -m src.cli positions
 
-### Pattern Detection API
-
-```python
-from test_minute_timerag_qqq import load_data, create_patterns, detect_patterns
-
-# Load data
-data = load_data(csv_file='QQQ_minute_data.csv')
-
-# Create pattern templates
-patterns = create_patterns()
-
-# Detect patterns
-detected = detect_patterns(data, patterns, window_size=60, threshold=5.0)
+# View pattern performance
+python -m src.cli performance
 ```
 
-### Creating Custom Patterns
+## Project Structure
 
-```python
-from test_minute_timerag_qqq import create_custom_pattern
-
-# Create a custom pattern template
-wedge_pattern = create_custom_pattern("ascending_wedge", length=60)
+```
+trading_pattern/
+├── config/
+│   ├── config.yaml           # Main configuration
+│   └── config.example.yaml   # Example configuration
+├── src/
+│   ├── __init__.py
+│   ├── cli.py                # Command-line interface
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── config.py         # Configuration management
+│   │   ├── events.py         # Event system
+│   │   ├── database.py       # SQLite database
+│   │   ├── logger.py         # Logging setup
+│   │   └── exceptions.py     # Custom exceptions
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── ibkr_client.py    # IBKR API client
+│   │   ├── market_data.py    # Market data handling
+│   │   └── historical.py     # Historical data management
+│   ├── ai/
+│   │   ├── __init__.py
+│   │   ├── claude_client.py  # Claude API integration
+│   │   ├── pattern_generator.py  # AI pattern generation
+│   │   └── prompts.py        # Prompt templates
+│   ├── strategy/
+│   │   ├── __init__.py
+│   │   ├── pattern.py        # Pattern definitions
+│   │   ├── signal.py         # Signal generation
+│   │   └── risk.py           # Risk management
+│   ├── backtest/
+│   │   ├── __init__.py
+│   │   ├── engine.py         # Backtesting engine
+│   │   ├── metrics.py        # Performance metrics
+│   │   └── optimizer.py      # Walk-forward optimization
+│   └── execution/
+│       ├── __init__.py
+│       ├── order_manager.py  # Order management
+│       ├── position_tracker.py  # Position tracking
+│       └── live_trader.py    # Live trading loop
+├── tests/
+│   ├── __init__.py
+│   ├── test_backtest.py
+│   ├── test_patterns.py
+│   └── test_execution.py
+├── data/                     # Data storage (gitignored)
+├── logs/                     # Log files (gitignored)
+├── requirements.txt
+└── README.md
 ```
 
-## Technical Details
+## Backtesting Criteria
 
-- Pattern matching is performed using Euclidean distance between normalized price sequences
-- Time series data is normalized to range [0-1] for comparison
-- Pattern templates are randomly generated with slight variations to improve robustness
-- Confidence scores are calculated as 1 - (distance / threshold)
+Patterns must pass rigorous statistical tests before production deployment:
 
-This implementation demonstrates how the TimeRAG framework can be adapted for financial time series pattern recognition at the minute level, combining the power of time series pattern matching with real-time data processing for trading applications.
+1. **Minimum Trades**: At least 30 trades for statistical significance
+2. **Win Rate**: > 50% for mean-reversion, > 40% for trend-following
+3. **Profit Factor**: > 1.5 (gross profit / gross loss)
+4. **Sharpe Ratio**: > 1.0 annualized
+5. **Max Drawdown**: < 15% of account equity
+6. **Out-of-Sample Performance**: Must perform in walk-forward test
+7. **Statistical Significance**: t-test p-value < 0.05
+
+## Risk Management
+
+- **Position Sizing**: Kelly criterion with fractional Kelly (0.25)
+- **Stop Loss**: ATR-based dynamic stops
+- **Max Position**: 5% of account per trade
+- **Max Exposure**: 30% total account exposure
+- **Daily Loss Limit**: 2% maximum daily loss
+
+## License
+
+MIT License - See LICENSE file for details.
+
+## Disclaimer
+
+This software is for educational purposes only. Trading involves substantial risk of loss.
+Past performance does not guarantee future results. Use at your own risk.
