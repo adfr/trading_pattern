@@ -14,6 +14,7 @@ from ..core.logger import get_logger
 from ..data.ibkr_client import IBKRClient
 from ..data.market_data import MarketDataManager
 from ..strategy.pattern import PatternMatcher
+from ..strategy.pattern_manager import get_pattern_manager
 from ..strategy.signal import SignalGenerator, SignalType
 from ..strategy.risk import RiskManager
 from .order_manager import OrderManager
@@ -56,9 +57,9 @@ class LiveTrader:
         self.position_tracker = PositionTracker(config, self.database, self.event_bus)
         self.risk_manager = RiskManager(config, self.event_bus)
 
-        # Strategy components
-        self.pattern_matcher = PatternMatcher()
-        self.signal_generator = SignalGenerator(self.pattern_matcher, self.event_bus)
+        # Strategy components - use PatternManager for persistent patterns
+        self.pattern_manager = get_pattern_manager(self.database)
+        self.signal_generator = SignalGenerator(self.pattern_manager.pattern_matcher, self.event_bus)
 
         # Trading state
         self._running = False
@@ -73,13 +74,12 @@ class LiveTrader:
 
     def load_deployed_patterns(self) -> None:
         """Load patterns that have been deployed for trading."""
-        patterns = self.database.get_patterns(status="deployed")
+        count = self.pattern_manager.load_deployed_patterns()
 
-        for pattern_data in patterns:
-            self.pattern_matcher.load_pattern_from_dict(pattern_data)
-            self._active_patterns.append(pattern_data)
+        # Also track active patterns for internal use
+        self._active_patterns = self.database.get_patterns(status="deployed")
 
-        logger.info(f"Loaded {len(patterns)} deployed patterns")
+        logger.info(f"Loaded {count} deployed patterns into pattern manager")
 
     def start(self) -> None:
         """Start live trading."""

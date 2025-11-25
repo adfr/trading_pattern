@@ -296,6 +296,14 @@ def backtest(
 
         console.print(results_table)
 
+        # Show pattern manager stats
+        from .strategy.pattern_manager import get_pattern_manager
+        pattern_manager = get_pattern_manager(database)
+        loaded_count = pattern_manager.get_pattern_count()
+        console.print()
+        console.print(f"[green]✓ {loaded_count} pattern(s) kept in memory for live trading[/green]")
+        console.print(f"[dim]Use 'patterns' command to view patterns in memory[/dim]")
+
     finally:
         if ibkr_client:
             ibkr_client.disconnect()
@@ -458,12 +466,22 @@ def patterns(ctx: click.Context) -> None:
         console.print("[yellow]No patterns found. Use 'generate' command to create patterns.[/yellow]")
         return
 
+    # Get patterns loaded in memory
+    from .strategy.pattern_manager import get_pattern_manager
+    pattern_manager = get_pattern_manager(database)
+    loaded_ids = set(pattern_manager.get_loaded_patterns())
+
+    # Show memory stats
+    console.print(f"[dim]Patterns in memory: {len(loaded_ids)}[/dim]")
+    console.print()
+
     table = Table(title="Trading Patterns")
     table.add_column("ID", style="dim")
     table.add_column("Name", style="cyan")
     table.add_column("Type")
     table.add_column("Symbol")
     table.add_column("Status")
+    table.add_column("In Memory", justify="center")
     table.add_column("Created")
 
     for p in all_patterns:
@@ -474,16 +492,257 @@ def patterns(ctx: click.Context) -> None:
             "failed": "red",
         }.get(p["status"], "white")
 
+        in_memory = "✓" if p["id"] in loaded_ids else ""
+
         table.add_row(
             p["id"][:8],
             p["name"][:30],
             p.get("pattern_type", "N/A"),
             p.get("symbol", "N/A"),
             f"[{status_color}]{p['status']}[/{status_color}]",
+            f"[green]{in_memory}[/green]" if in_memory else "",
             str(p.get("created_at", "N/A"))[:10],
         )
 
     console.print(table)
+
+
+@cli.command()
+@click.option("--pattern-id", "-p", required=True, help="Pattern ID or name to view")
+@click.pass_context
+def view_pattern(ctx: click.Context, pattern_id: str) -> None:
+    """View detailed information about a trading pattern/strategy.
+
+    You can use:
+    - Full pattern ID
+    - Short ID (first 8 chars from 'patterns' list)
+    - Pattern name
+    """
+    config = get_config(ctx.obj.get("config_path"))
+    database = Database(config.database_path)
+
+    # Try exact ID first
+    pattern = database.get_pattern(pattern_id)
+
+    # If not found, try to match by partial ID or name
+    if not pattern:
+        all_patterns = database.get_patterns()
+
+        # Try partial ID match (first 8 chars)
+        for p in all_patterns:
+            if p["id"].startswith(pattern_id):
+                pattern = p
+                break
+
+        # Try name match
+        if not pattern:
+            for p in all_patterns:
+                if p["name"] == pattern_id or p["name"].startswith(pattern_id):
+                    pattern = p
+                    break
+
+    if not pattern:
+        console.print(f"[red]Pattern not found: {pattern_id}[/red]")
+        console.print("[yellow]Use 'patterns' command to see available patterns[/yellow]")
+        return
+
+    import json
+
+    # Parse definition if it's a JSON string
+    definition = pattern.get("definition", {})
+    if isinstance(definition, str):
+        try:
+            definition = json.loads(definition)
+        except:
+            definition = {}
+
+    # Merge definition fields into pattern for easier access
+    if definition:
+        pattern = {**pattern, **definition}
+
+    # Header
+    console.print()
+    console.print(Panel(
+        f"[bold cyan]{pattern['name']}[/bold cyan]\n"
+        f"[dim]ID: {pattern['id']}[/dim]",
+        title="Trading Pattern/Strategy"
+    ))
+    console.print()
+
+    # Basic Info
+    info_table = Table(show_header=False, box=None)
+    info_table.add_column("Property", style="cyan", width=20)
+    info_table.add_column("Value", style="white")
+
+    info_table.add_row("Type", pattern.get("pattern_type", "N/A"))
+    info_table.add_row("Symbol", pattern.get("symbol", "N/A"))
+    info_table.add_row("Timeframe", pattern.get("timeframe", "N/A"))
+    info_table.add_row("Status", pattern.get("status", "N/A"))
+    info_table.add_row("Created", str(pattern.get("created_at", "N/A")))
+    info_table.add_row("Created By", pattern.get("created_by", "N/A"))
+
+    console.print(info_table)
+    console.print()
+
+    # Description
+    if pattern.get("description"):
+        console.print(Panel(pattern["description"], title="Description", border_style="dim"))
+        console.print()
+
+    # Rationale
+    if pattern.get("rationale"):
+        console.print(Panel(pattern["rationale"], title="Rationale", border_style="dim"))
+        console.print()
+
+    # Detection Conditions
+    detection = pattern.get("detection", {})
+    if detection and detection.get("conditions"):
+        conditions_table = Table(title="Detection Conditions", show_header=True)
+        conditions_table.add_column("#", style="dim", width=4)
+        conditions_table.add_column("Indicator", style="cyan")
+        conditions_table.add_column("Operator", style="yellow", justify="center")
+        conditions_table.add_column("Value", style="green")
+        conditions_table.add_column("Lookback", justify="right")
+
+        for i, cond in enumerate(detection["conditions"], 1):
+            conditions_table.add_row(
+                str(i),
+                cond.get("indicator", "N/A"),
+                cond.get("operator", "N/A"),
+                str(cond.get("value", "N/A")),
+                str(cond.get("lookback", 0))
+            )
+
+        console.print(conditions_table)
+        console.print(f"[dim]Minimum conditions required: {detection.get('min_conditions_met', 'N/A')}[/dim]")
+        console.print()
+
+    # Entry Rules
+    entry = pattern.get("entry", {})
+    if entry:
+        entry_table = Table(show_header=False, box=None, title="Entry Rules")
+        entry_table.add_column("Property", style="cyan", width=25)
+        entry_table.add_column("Value", style="white")
+
+        if entry.get("order_type"):
+            entry_table.add_row("Order Type", entry["order_type"])
+        if entry.get("position_size"):
+            entry_table.add_row("Position Size", str(entry["position_size"]))
+        if entry.get("conditions"):
+            entry_table.add_row("Additional Conditions", json.dumps(entry["conditions"], indent=2))
+
+        console.print(entry_table)
+        console.print()
+
+    # Exit Rules
+    exit_rules = pattern.get("exit", {})
+    if exit_rules:
+        exit_table = Table(show_header=False, box=None, title="Exit Rules")
+        exit_table.add_column("Property", style="cyan", width=25)
+        exit_table.add_column("Value", style="white")
+
+        # Stop Loss
+        sl = exit_rules.get("stop_loss", {})
+        if sl:
+            exit_table.add_row(
+                "Stop Loss",
+                f"{sl.get('type', 'N/A')}: {sl.get('value', 'N/A')}"
+            )
+
+        # Take Profit
+        tp = exit_rules.get("take_profit", {})
+        if tp:
+            exit_table.add_row(
+                "Take Profit",
+                f"{tp.get('type', 'N/A')}: {tp.get('value', 'N/A')}"
+            )
+
+        # Time Exit
+        te = exit_rules.get("time_exit", {})
+        if te and te.get("enabled"):
+            exit_table.add_row(
+                "Time Exit",
+                f"{te.get('bars', 'N/A')} bars"
+            )
+
+        console.print(exit_table)
+        console.print()
+
+    # Filters
+    filters = pattern.get("filters", {})
+    if filters:
+        console.print(Panel.fit("[bold]Filters[/bold]", border_style="cyan"))
+        for key, value in filters.items():
+            if isinstance(value, dict):
+                console.print(f"[cyan]{key}:[/cyan]")
+                for k, v in value.items():
+                    console.print(f"  • {k}: {v}")
+            else:
+                console.print(f"[cyan]{key}:[/cyan] {value}")
+        console.print()
+
+    # Risk Parameters
+    risk = pattern.get("risk", {})
+    if risk:
+        risk_table = Table(show_header=False, box=None, title="Risk Management")
+        risk_table.add_column("Parameter", style="cyan", width=25)
+        risk_table.add_column("Value", style="white")
+
+        if risk.get("max_position_pct"):
+            risk_table.add_row("Max Position Size", f"{risk['max_position_pct']}%")
+        if risk.get("risk_per_trade_pct"):
+            risk_table.add_row("Risk Per Trade", f"{risk['risk_per_trade_pct']}%")
+        if risk.get("reward_to_risk"):
+            risk_table.add_row("Reward to Risk Ratio", str(risk['reward_to_risk']))
+        if risk.get("win_rate_target"):
+            risk_table.add_row("Target Win Rate", f"{risk['win_rate_target']}%")
+        if risk.get("max_daily_trades"):
+            risk_table.add_row("Max Daily Trades", str(risk['max_daily_trades']))
+        if risk.get("daily_loss_limit_pct"):
+            risk_table.add_row("Daily Loss Limit", f"{risk['daily_loss_limit_pct']}%")
+        if risk.get("description"):
+            risk_table.add_row("Notes", risk['description'])
+
+        console.print(risk_table)
+        console.print()
+
+    # Implementation Notes
+    impl_notes = pattern.get("implementation_notes", {})
+    if impl_notes:
+        console.print(Panel.fit("[bold]Implementation Notes[/bold]", border_style="cyan"))
+        for key, value in impl_notes.items():
+            console.print(f"[cyan]{key.replace('_', ' ').title()}:[/cyan]")
+            console.print(f"  {value}")
+            console.print()
+        console.print()
+
+    # Backtest Results
+    if pattern.get("backtest_results"):
+        try:
+            results = json.loads(pattern["backtest_results"]) if isinstance(pattern["backtest_results"], str) else pattern["backtest_results"]
+
+            metrics_table = Table(title="Backtest Performance", show_header=True)
+            metrics_table.add_column("Metric", style="cyan")
+            metrics_table.add_column("Value", style="white", justify="right")
+
+            metrics_table.add_row("Total Trades", str(results.get("total_trades", 0)))
+            metrics_table.add_row("Win Rate", f"{results.get('win_rate', 0):.1%}")
+            metrics_table.add_row("Profit Factor", f"{results.get('profit_factor', 0):.2f}")
+            metrics_table.add_row("Sharpe Ratio", f"{results.get('sharpe_ratio', 0):.2f}")
+            metrics_table.add_row("Max Drawdown", f"{results.get('max_drawdown', 0):.1%}")
+            metrics_table.add_row("Total Return", f"{results.get('total_return', 0):.1%}")
+
+            console.print(metrics_table)
+
+            if results.get("failure_reasons"):
+                console.print()
+                console.print("[red]Failure Reasons:[/red]")
+                for reason in results["failure_reasons"]:
+                    console.print(f"  • {reason}")
+        except Exception as e:
+            console.print(f"[yellow]Could not parse backtest results: {e}[/yellow]")
+
+    console.print()
 
 
 @cli.command()

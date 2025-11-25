@@ -24,7 +24,7 @@ class IBKRConfig:
 @dataclass
 class AIConfig:
     """Claude AI configuration."""
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-5-20250929"
     max_tokens: int = 4096
     temperature: float = 0.7
     api_key: Optional[str] = None

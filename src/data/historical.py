@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+import pytz
 
 import pandas as pd
 import numpy as np
@@ -202,9 +203,22 @@ class HistoricalDataManager:
                 return df
 
             # Filter to requested date range
+            # Handle timezone-aware comparison if needed
             if start_date:
+                # If df.index is timezone-aware, make start_date timezone-aware too
+                if df.index.tz is not None:
+                    if start_date.tzinfo is None:
+                        start_date = pytz.timezone('US/Eastern').localize(start_date)
+                    else:
+                        start_date = start_date.astimezone(pytz.timezone('US/Eastern'))
                 df = df[df.index >= start_date]
             if end_date:
+                # If df.index is timezone-aware, make end_date timezone-aware too
+                if df.index.tz is not None:
+                    if end_date.tzinfo is None:
+                        end_date = pytz.timezone('US/Eastern').localize(end_date)
+                    else:
+                        end_date = end_date.astimezone(pytz.timezone('US/Eastern'))
                 df = df[df.index <= end_date]
 
             # Ensure standard column names
@@ -407,7 +421,11 @@ class HistoricalDataManager:
         df["atr"] = tr.rolling(14).mean()
 
         # Filter to actual backtest period
-        df = df[df.index >= start_date]
+        # Handle timezone-aware comparison
+        filter_start = start_date
+        if df.index.tz is not None and start_date.tzinfo is None:
+            filter_start = pytz.timezone('US/Eastern').localize(start_date)
+        df = df[df.index >= filter_start]
 
         logger.info(f"Prepared {len(df)} IBKR bars for {symbol} backtest")
         return df

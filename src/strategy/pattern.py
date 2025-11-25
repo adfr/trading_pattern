@@ -205,18 +205,30 @@ class PatternMatcher:
         """Check if pattern matches at specific bar."""
         conditions_met = 0
         indicators_used = {}
+        failed_conditions = []
 
-        for condition in pattern.conditions:
+        logger.debug(f"Checking pattern '{pattern.name}' at bar {bar_idx}")
+
+        for i, condition in enumerate(pattern.conditions):
             try:
                 result = self._evaluate_condition(df, condition, bar_idx)
                 if result:
                     conditions_met += 1
+                    logger.debug(f"  ✓ Condition {i+1}/{len(pattern.conditions)} PASSED: {condition}")
+                else:
+                    failed_conditions.append((i+1, condition))
+                    logger.debug(f"  ✗ Condition {i+1}/{len(pattern.conditions)} FAILED: {condition}")
             except Exception as e:
-                logger.debug(f"Condition evaluation error: {e}")
+                logger.debug(f"  ✗ Condition {i+1}/{len(pattern.conditions)} ERROR: {e}")
+                failed_conditions.append((i+1, condition))
                 continue
+
+        logger.debug(f"Pattern '{pattern.name}': {conditions_met}/{len(pattern.conditions)} conditions met (need {pattern.min_conditions_met})")
 
         # Check if enough conditions are met
         if conditions_met < pattern.min_conditions_met:
+            if failed_conditions:
+                logger.debug(f"Pattern '{pattern.name}' REJECTED: Not enough conditions met")
             return None
 
         # Apply filters
@@ -256,6 +268,7 @@ class PatternMatcher:
         left_value = self._get_indicator_value(df, indicator, bar_idx - lookback)
 
         if left_value is None or np.isnan(left_value):
+            logger.debug(f"    Indicator '{indicator}' returned None/NaN at bar {bar_idx - lookback}")
             return False
 
         # Get comparison value
@@ -263,35 +276,46 @@ class PatternMatcher:
             # Value is another indicator
             right_value = self._get_indicator_value(df, value, bar_idx - lookback)
             if right_value is None or np.isnan(right_value):
+                logger.debug(f"    Comparison indicator '{value}' returned None/NaN at bar {bar_idx - lookback}")
                 return False
         else:
             right_value = float(value)
 
         # Evaluate operator
+        result = False
+        value_str = f"{value}" if not isinstance(value, str) else f"{value}={right_value:.4f}"
+
         if operator == ">":
-            return left_value > right_value
+            result = left_value > right_value
         elif operator == "<":
-            return left_value < right_value
+            result = left_value < right_value
         elif operator == ">=":
-            return left_value >= right_value
+            result = left_value >= right_value
         elif operator == "<=":
-            return left_value <= right_value
+            result = left_value <= right_value
         elif operator == "==":
-            return abs(left_value - right_value) < 0.0001
+            result = abs(left_value - right_value) < 0.0001
         elif operator == "crosses_above":
             prev_left = self._get_indicator_value(df, indicator, bar_idx - lookback - 1)
             prev_right = self._get_indicator_value(df, value, bar_idx - lookback - 1) if isinstance(value, str) else right_value
             if prev_left is None or prev_right is None:
+                logger.debug(f"    Cannot check crosses_above: prev values unavailable")
                 return False
-            return prev_left <= prev_right and left_value > right_value
+            result = prev_left <= prev_right and left_value > right_value
+            logger.debug(f"    {indicator}: prev={prev_left:.4f}, curr={left_value:.4f} crosses_above {value_str}? {result}")
+            return result
         elif operator == "crosses_below":
             prev_left = self._get_indicator_value(df, indicator, bar_idx - lookback - 1)
             prev_right = self._get_indicator_value(df, value, bar_idx - lookback - 1) if isinstance(value, str) else right_value
             if prev_left is None or prev_right is None:
+                logger.debug(f"    Cannot check crosses_below: prev values unavailable")
                 return False
-            return prev_left >= prev_right and left_value < right_value
+            result = prev_left >= prev_right and left_value < right_value
+            logger.debug(f"    {indicator}: prev={prev_left:.4f}, curr={left_value:.4f} crosses_below {value_str}? {result}")
+            return result
 
-        return False
+        logger.debug(f"    {indicator}={left_value:.4f} {operator} {value_str}? {result}")
+        return result
 
     def _get_indicator_value(
         self,

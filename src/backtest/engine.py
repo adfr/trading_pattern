@@ -13,6 +13,7 @@ from ..core.database import Database
 from ..core.events import Event, EventBus, EventType, get_event_bus
 from ..core.logger import get_logger
 from ..strategy.pattern import PatternDefinition, PatternMatcher
+from ..strategy.pattern_manager import get_pattern_manager
 from ..strategy.signal import Signal, SignalGenerator, SignalType
 from .metrics import MetricsCalculator, PerformanceMetrics
 
@@ -99,6 +100,9 @@ class BacktestEngine:
         self.event_bus = event_bus or get_event_bus()
         self.metrics_calculator = MetricsCalculator()
 
+        # Pattern manager for persistent patterns
+        self.pattern_manager = get_pattern_manager(database)
+
         # Simulation parameters
         self.initial_capital = 100000
         self.commission = 0.001  # 0.1% per trade
@@ -132,10 +136,9 @@ class BacktestEngine:
         if data.empty:
             return self._create_empty_result(pattern)
 
-        # Initialize components
-        pattern_matcher = PatternMatcher()
-        pattern_def = pattern_matcher.load_pattern_from_dict(pattern)
-        signal_generator = SignalGenerator(pattern_matcher)
+        # Add pattern to manager (keeps it in memory after backtest)
+        pattern_def = self.pattern_manager.add_pattern(pattern)
+        signal_generator = SignalGenerator(self.pattern_manager.pattern_matcher)
 
         # Publish start event
         self.event_bus.publish(Event(
@@ -219,8 +222,12 @@ class BacktestEngine:
         position: Optional[dict] = None
         equity_values = [capital]
 
+        logger.info(f"Starting backtest simulation for '{pattern.name}': {len(data)} bars, starting at bar 50")
+
         # Iterate through data
+        signals_checked = 0
         for i in range(50, len(data)):  # Start after warmup period
+            signals_checked += 1
             current_data = data.iloc[:i+1]
             current_bar = data.iloc[i]
             current_price = current_bar["close"]
@@ -289,6 +296,8 @@ class BacktestEngine:
 
         result.final_capital = capital
         result.equity_curve = np.array(equity_values)
+
+        logger.info(f"Backtest simulation complete: checked {signals_checked} bars, generated {len(result.trades)} trades")
 
         return result
 

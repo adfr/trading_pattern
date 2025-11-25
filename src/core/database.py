@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+import numpy as np
+import pandas as pd
 from sqlalchemy import (
     Boolean,
     Column,
@@ -21,6 +23,23 @@ from .logger import get_logger
 
 Base = declarative_base()
 logger = get_logger(__name__)
+
+
+def json_serializable(obj: Any) -> Any:
+    """Convert non-JSON-serializable objects to serializable formats."""
+    if isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [json_serializable(item) for item in obj]
+    return obj
 
 
 class Pattern(Base):
@@ -187,9 +206,9 @@ class Database:
                 pattern_type=pattern_data.get("pattern_type", "neutral"),
                 timeframe=pattern_data.get("timeframe", "1min"),
                 symbol=pattern_data.get("symbol", ""),
-                definition=json.dumps(pattern_data["definition"]),
-                entry_rules=json.dumps(pattern_data.get("entry_rules", {})),
-                exit_rules=json.dumps(pattern_data.get("exit_rules", {})),
+                definition=json.dumps(json_serializable(pattern_data["definition"])),
+                entry_rules=json.dumps(json_serializable(pattern_data.get("entry_rules", {}))),
+                exit_rules=json.dumps(json_serializable(pattern_data.get("exit_rules", {}))),
                 created_by=pattern_data.get("created_by", "ai"),
                 status=pattern_data.get("status", "pending"),
             )
@@ -234,7 +253,9 @@ class Database:
             if pattern:
                 pattern.status = status
                 if backtest_results:
-                    pattern.backtest_results = json.dumps(backtest_results)
+                    # Convert non-serializable objects before JSON encoding
+                    serializable_results = json_serializable(backtest_results)
+                    pattern.backtest_results = json.dumps(serializable_results)
                     pattern.passed_backtest = backtest_results.get("passed", False)
                 session.commit()
 
@@ -361,11 +382,11 @@ class Database:
                 annualized_return=result_data.get("annualized_return"),
                 t_statistic=result_data.get("t_statistic"),
                 p_value=result_data.get("p_value"),
-                detailed_results=json.dumps(result_data.get("detailed_results", {})),
+                detailed_results=json.dumps(json_serializable(result_data.get("detailed_results", {}))),
                 is_walk_forward=result_data.get("is_walk_forward", False),
                 walk_forward_window=result_data.get("walk_forward_window"),
                 passed=result_data.get("passed", False),
-                failure_reasons=json.dumps(result_data.get("failure_reasons", [])),
+                failure_reasons=json.dumps(json_serializable(result_data.get("failure_reasons", []))),
             )
             session.add(result)
             session.commit()
