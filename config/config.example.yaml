@@ -1,0 +1,74 @@
+# IBKR AI Trading System Configuration
+
+# IBKR Connection Settings
+ibkr:
+  host: "127.0.0.1"
+  port: 7497  # 7497 for paper trading, 7496 for live
+  client_id: 1
+  timeout: 60
+  readonly: false
+
+# Claude AI Settings
+ai:
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+  temperature: 0.7
+
+# Trading Settings
+trading:
+  mode: "paper"  # paper or live
+  symbols:
+    - "QQQ"
+    - "SPY"
+  timeframe: "1min"  # 1min, 5min, 15min, 1hour, 1day
+  max_position_size: 0.05  # 5% of account per trade
+  max_total_exposure: 0.30  # 30% total exposure
+  daily_loss_limit: 0.02  # 2% daily loss limit
+
+# Risk Management
+risk:
+  stop_loss_atr_multiplier: 2.0
+  take_profit_atr_multiplier: 3.0
+  max_trades_per_day: 10
+  min_trade_interval_minutes: 5
+  kelly_fraction: 0.25
+
+# Backtesting Criteria
+backtest:
+  min_trades: 30
+  min_win_rate: 0.40
+  min_profit_factor: 1.5
+  min_sharpe_ratio: 1.0
+  max_drawdown: 0.15
+  walk_forward_windows: 5
+  out_of_sample_ratio: 0.3
+
+# Pattern Generation
+patterns:
+  window_size: 60  # minutes
+  similarity_threshold: 0.85
+  min_confidence: 0.7
+  max_patterns_per_generation: 5
+
+# Database
+database:
+  path: "data/trading.db"
+
+# Logging
+logging:
+  level: "INFO"
+  file: "logs/trading.log"
+  max_size_mb: 10
+  backup_count: 5
+
+# Market Hours (US Eastern)
+market:
+  open_time: "09:30"
+  close_time: "16:00"
+  timezone: "America/New_York"
+  trading_days:
+    - "Monday"
+    - "Tuesday"
+    - "Wednesday"
+    - "Thursday"
+    - "Friday"

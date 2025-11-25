@@ -1,45 +1,65 @@
-# Python-specific files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-.pytest_cache/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
 
-# Virtual Environment
-timerag_env/
+# Virtual environments
 venv/
 env/
+.venv/
+.env/
+timerag_env/
 ENV/
 
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Data files
-data/*.csv
-*.csv
-detected_patterns.csv
-
-# Generated visualizations
-patterns/
-images/
-*.png
-
-# IDE specific files
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 
-# OS specific files
+# Configuration (keep example)
+config/config.yaml
+
+# Data files
+data/*.db
+data/*.csv
+data/*.parquet
+*.csv
+*.parquet
+
+# Logs
+logs/
+*.log
+pip-log.txt
+
+# Generated files
+*.png
+*.jpg
+*.jpeg
+patterns/
+images/
+reports/
+
+# OS files
 .DS_Store
 .DS_Store?
 ._*
@@ -48,7 +68,20 @@ images/
 ehthumbs.db
 Thumbs.db
 
-# Logs
-*.log
-pip-log.txt
-pip-delete-this-directory.txt 
+# Secrets
+.env
+*.pem
+*.key
+credentials.json
+
+# Testing
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# mypy
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
